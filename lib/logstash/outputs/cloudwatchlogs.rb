@@ -124,6 +124,7 @@ class LogStash::Outputs::CloudWatchLogs < LogStash::Outputs::Base
 
     if @use_codec
       @codec.on_event() {|event, payload| @buffer.enq({:timestamp => event.timestamp.time.to_f*1000,
+        :log_group_name => log_group_name_for_event(event),
         :message => payload})}
     end
   end # def register
@@ -145,6 +146,7 @@ class LogStash::Outputs::CloudWatchLogs < LogStash::Outputs::Base
       @codec.encode(event)
     else
       @buffer.enq({:timestamp => event.timestamp.time.to_f*1000,
+       :log_group_name => log_group_name_for_event(event),
        :message => event.get(MESSAGE) })
     end
   end # def receive
@@ -160,21 +162,28 @@ class LogStash::Outputs::CloudWatchLogs < LogStash::Outputs::Base
   public
   def flush(events)
     return if events.nil? or events.empty?
-    log_event_batches = prepare_log_events(events)
-    log_event_batches.each do |log_events|
-      put_log_events(log_events)
+    events_by_group = events.group_by {|e| e[:log_group_name]}
+    events_by_group.each do |log_group_name, grouped_events|
+      log_event_batches = prepare_log_events(grouped_events)
+      log_event_batches.each do |log_events|
+        put_log_events(log_group_name, log_events)
+      end
     end
   end
 
   private
-  def put_log_events(log_events)
+  def log_group_name_for_event(event)
+    @log_group_name.start_with?("[") ? event.get(@log_group_name) : @log_group_name
+  end
+
+  def put_log_events(log_group_name, log_events)
     return if log_events.nil? or log_events.empty?
     # Shouldn't send two requests within MIN_DELAY
     delay = MIN_DELAY - (Time.now.to_f - @last_flush)
     sleep(delay) if delay > 0
     backoff = 1
     begin
-      @logger.info("Sending #{log_events.size} events to #{@log_group_name}/#{@log_stream_name}")
+      @logger.info("Sending #{log_events.size} events to #{log_group_name}/#{@log_stream_name}")
       @last_flush = Time.now.to_f
       if @dry_run
         log_events.each do |event|
@@ -183,9 +192,9 @@ class LogStash::Outputs::CloudWatchLogs < LogStash::Outputs::Base
         return
       end
       response = @cwl.put_log_events(
-          :log_group_name => @log_group_name,
+          :log_group_name => log_group_name,
           :log_stream_name => @log_stream_name,
-          :log_events => log_events,
+          :log_events => log_events.map {|le| le.select {|k| k != :log_group_name}},
           :sequence_token => @sequence_token
       )
       @sequence_token = response.next_sequence_token
@@ -217,14 +226,14 @@ class LogStash::Outputs::CloudWatchLogs < LogStash::Outputs::Base
     rescue Aws::CloudWatchLogs::Errors::ResourceNotFoundException => e
       @logger.info("Will create log group/stream and retry")
       begin
-        @cwl.create_log_group(:log_group_name => @log_group_name)
+        @cwl.create_log_group(:log_group_name => log_group_name)
       rescue Aws::CloudWatchLogs::Errors::ResourceAlreadyExistsException => e
-        @logger.info("Log group #{@log_group_name} already exists")
+        @logger.info("Log group #{log_group_name} already exists")
       rescue Exception => e
         @logger.error(e)
       end
       begin
-        @cwl.create_log_stream(:log_group_name => @log_group_name, :log_stream_name => @log_stream_name)
+        @cwl.create_log_stream(:log_group_name => log_group_name, :log_stream_name => @log_stream_name)
       rescue Aws::CloudWatchLogs::Errors::ResourceAlreadyExistsException => e
         @logger.info("Log stream #{@log_stream_name} already exists")
       rescue Exception => e
@@ -246,7 +255,7 @@ class LogStash::Outputs::CloudWatchLogs < LogStash::Outputs::Base
 
   private
   def invalid?(event)
-    status = event.get(TIMESTAMP).nil? || (!@use_codec && event.get(MESSAGE).nil?)
+    status = event.get(TIMESTAMP).nil? || (!@use_codec && event.get(MESSAGE).nil?) || log_group_name_for_event(event).nil?
     if status
       @logger.warn("Skipping invalid event #{event.to_hash}")
     end

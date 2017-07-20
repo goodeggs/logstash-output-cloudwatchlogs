@@ -74,45 +74,80 @@ describe "outputs/cloudwatchlogs" do
   end
 
   describe "#receive" do
-    before :each do
-      @output = LogStash::Plugin.lookup("output", "cloudwatchlogs").new(
-        "log_group_name" => "lg", "log_stream_name" => "ls")
-      @output.register
+    context "with a static log_group_name" do
+      before :each do
+        @output = LogStash::Plugin.lookup("output", "cloudwatchlogs").new(
+          "log_group_name" => "lg", "log_stream_name" => "ls")
+        @output.register
+      end
+
+      context "when event is invalid" do
+        before :each do
+          @event = LogStash::Event.new
+          @event.set("@timestamp", LogStash::Timestamp.coerce("2015-02-13T01:19:08Z"))
+          @event.set("message", "test")
+          expect(@output.buffer).not_to receive(:enq)
+        end
+        context "when event doesn't have @timestamp" do
+          it "should not save the event" do
+            @event.remove("@timestamp")
+            expect { @output.receive(@event) }.to_not raise_error
+          end
+        end
+        context "when event doesn't have message" do
+          it "should not save the event" do
+            @event.remove("message")
+            expect { @output.receive(@event) }.to_not raise_error
+          end
+        end
+      end
+
+      context "when event is valid" do
+        context "when first event is received" do
+          it "should save the event to buffer" do
+            expect(@output.buffer).to receive(:enq) { {:timestamp => 1423786748000.0, :log_group_name => "lg", :message => "test"} }
+            event = LogStash::Event.new
+            event.set("@timestamp", LogStash::Timestamp.coerce("2015-02-13T01:19:08Z"))
+            event.set("message", "test")
+            expect { @output.receive(event) }.to_not raise_error
+          end
+        end
+
+      end
     end
 
-    context "when event is invalid" do
+    context "with a templated log_group_name" do
       before :each do
+        @output = LogStash::Plugin.lookup("output", "cloudwatchlogs").new(
+          "log_group_name" => "[env][log_group]", "log_stream_name" => "ls")
+        @output.register
+
         @event = LogStash::Event.new
         @event.set("@timestamp", LogStash::Timestamp.coerce("2015-02-13T01:19:08Z"))
         @event.set("message", "test")
-        expect(@output.buffer).not_to receive(:enq)
+        @event.set("[env][log_group]", "lg")
       end
-      context "when event doesn't have @timestamp" do
-        it "should not save the event" do
-          @event.remove("@timestamp")
-          expect { @output.receive(@event) }.to_not raise_error
-        end
-      end
-      context "when event doesn't have message" do
-        it "should not save the event" do
-          @event.remove("message")
-          expect { @output.receive(@event) }.to_not raise_error
-        end
-      end
-    end
 
-    context "when event is valid" do
-      context "when first event is received" do
+      context "when event is invalid" do
+        before :each do
+          expect(@output.buffer).not_to receive(:enq)
+        end
+        context "when event doesn't have the log_group_name field" do
+          it "should not save the event" do
+            @event.remove("[env][log_group]")
+            expect { @output.receive(@event) }.to_not raise_error
+          end
+        end
+      end
+
+      context "when event is valid" do
         it "should save the event to buffer" do
-          expect(@output.buffer).to receive(:enq) { {:timestamp => 1423786748000.0, :message => "test"} }
-          event = LogStash::Event.new
-          event.set("@timestamp", LogStash::Timestamp.coerce("2015-02-13T01:19:08Z"))
-          event.set("message", "test")
-          expect { @output.receive(event) }.to_not raise_error
+          expect(@output.buffer).to receive(:enq) { {:timestamp => 1423786748000.0, :log_group_name => "lg", :message => "test"} }
+          expect { @output.receive(@event) }.to_not raise_error
         end
       end
-
     end
+
   end
 
   describe "#flush" do
@@ -148,8 +183,8 @@ describe "outputs/cloudwatchlogs" do
             :sequence_token => 'token'
           ) { @response }
           @output.flush([
-            {:timestamp => 124, :message => 'zzz'},
-            {:timestamp => 123, :message => 'abc'}])
+            {:timestamp => 124, :log_group_name => "lg", :message => 'zzz'},
+            {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
         end
       end
       context "when events are sorted" do
@@ -163,8 +198,8 @@ describe "outputs/cloudwatchlogs" do
             :sequence_token => 'token'
           ) { @response }
           @output.flush([
-            {:timestamp => 123, :message => 'abc'},
-            {:timestamp => 124, :message => 'zzz'}])
+            {:timestamp => 123, :log_group_name => "lg", :message => 'abc'},
+            {:timestamp => 124, :log_group_name => "lg", :message => 'zzz'}])
         end
       end
       context "when log events span more than 24 hours" do
@@ -185,8 +220,8 @@ describe "outputs/cloudwatchlogs" do
             :sequence_token => 'ntoken'
           )
           @output.flush([
-            {:timestamp => 123, :message => 'abc'},
-            {:timestamp => 123 + twenty_four_hours_in_mills + 1, :message => 'zzz'}])
+            {:timestamp => 123, :log_group_name => "lg", :message => 'abc'},
+            {:timestamp => 123 + twenty_four_hours_in_mills + 1, :log_group_name => "lg", :message => 'zzz'}])
         end
       end
       context "when log events span exactly 24 hours" do
@@ -201,8 +236,8 @@ describe "outputs/cloudwatchlogs" do
             :sequence_token => 'token'
           ) { @response }
           @output.flush([
-            {:timestamp => 123, :message => 'abc'},
-            {:timestamp => 123 + twenty_four_hours_in_mills, :message => 'zzz'}])
+            {:timestamp => 123, :log_group_name => "lg", :message => 'abc'},
+            {:timestamp => 123 + twenty_four_hours_in_mills, :log_group_name => "lg", :message => 'zzz'}])
         end
       end
     end
@@ -220,7 +255,7 @@ describe "outputs/cloudwatchlogs" do
             :sequence_token => nil
           ) { @response }
           @output.flush([
-            {:timestamp => 123, :message => 'abc'}])
+            {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
         end
         context "when the log stream doesn't exist" do
           it "should create log group and log stream" do
@@ -240,7 +275,7 @@ describe "outputs/cloudwatchlogs" do
             expect(@cwl).to receive(:create_log_group).with(:log_group_name => 'lg')
             expect(@cwl).to receive(:create_log_stream).with(:log_group_name => 'lg', :log_stream_name => 'ls')
             @output.flush([
-              {:timestamp => 123, :message => 'abc'}])
+              {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
           end
         end
         context "when the log stream exists" do
@@ -256,7 +291,7 @@ describe "outputs/cloudwatchlogs" do
                 :sequence_token => nil
               )
               @output.flush([
-                {:timestamp => 123, :message => 'abc'}])
+                {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
             end
           end
 
@@ -279,7 +314,7 @@ describe "outputs/cloudwatchlogs" do
                     :sequence_token => nil
                   )
                   @output.flush([
-                    {:timestamp => 123, :message => 'abc'}])
+                    {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
                 end
               end
               context "when the sending batch is different than accepted batch" do
@@ -306,7 +341,7 @@ describe "outputs/cloudwatchlogs" do
                     :sequence_token => '456'
                   ) { @response }
                   @output.flush([
-                    {:timestamp => 123, :message => 'abc'}])
+                    {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
                 end
               end
             end
@@ -335,7 +370,7 @@ describe "outputs/cloudwatchlogs" do
                   :sequence_token => '456'
                 ) { @response }
                 @output.flush([
-                  {:timestamp => 123, :message => 'abc'}])
+                  {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
               end
             end
           end
@@ -356,7 +391,7 @@ describe "outputs/cloudwatchlogs" do
             :sequence_token => 'lasttoken'
           ) { @response }
           @output.flush([
-            {:timestamp => 123, :message => 'abc'}])
+            {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
         end
       end
       context "when sending invalid request" do
@@ -370,12 +405,12 @@ describe "outputs/cloudwatchlogs" do
           expect(@cwl).to receive(:put_log_events).once.with(
               :log_events => [
                 {:timestamp => 123, :message => 'abc'}],
-              :log_group_name => nil,
+              :log_group_name => "lg",
               :log_stream_name => nil,
               :sequence_token => nil
             )
           @output.flush([
-            {:timestamp => 123, :message => 'abc'}])
+            {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
         end
       end
       context "when receiving unknown exception" do
@@ -420,7 +455,7 @@ describe "outputs/cloudwatchlogs" do
           # Should sleep upto 64 seconds for each retry
           expect(@output).to receive(:sleep).twice.with(64)
           @output.flush([
-            {:timestamp => 123, :message => 'abc'}])
+            {:timestamp => 123, :log_group_name => "lg", :message => 'abc'}])
         end
       end
     end
