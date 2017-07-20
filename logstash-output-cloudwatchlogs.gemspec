@@ -11,7 +11,7 @@ Gem::Specification.new do |s|
   s.require_paths = ["lib"]
 
   # Files
-  s.files = `git ls-files`.split($\)+::Dir.glob('vendor/*')
+  s.files = Dir["lib/**/*","spec/**/*","*.gemspec","*.md","Gemfile","LICENSE","NOTICE.txt"]
 
   # Tests
   s.test_files = s.files.grep(%r{^(test|spec|features)/})
